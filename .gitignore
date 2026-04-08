@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+*.db
+
+# Node
+node_modules/
+.next/
+
+# Environment
+.env
+.env.local
+backend/.env
+frontend/.env.local
+
+# Storage
+backend/storage/
+
+# OS
+.DS_Store
