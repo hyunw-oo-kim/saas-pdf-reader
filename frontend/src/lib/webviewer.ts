@@ -10,9 +10,9 @@
  * - XFDF import/export for annotation persistence
  */
 
-import type WebViewerInstance from "@pdftron/webviewer";
+import WebViewer from "@pdftron/webviewer";
 
-export type WebViewerInstanceType = WebViewerInstance.WebViewerInstance;
+export type WebViewerInstanceType = Awaited<ReturnType<typeof WebViewer>>;
 
 export interface InitWebViewerOptions {
   readOnly?: boolean;
