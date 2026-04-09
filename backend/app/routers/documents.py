@@ -218,15 +218,21 @@ async def list_documents(
     else:
         sort_column = sort_column.asc()
 
-    # Count total documents (RLS filters by tenant automatically)
-    count_stmt = select(func.count()).select_from(Document)
+    # Filter by current user's owner_id
+    owner_uuid = to_uuid(request.state.user.user_id)
+
+    # Count total documents for this owner
+    count_stmt = select(func.count()).select_from(Document).where(
+        Document.owner_id == owner_uuid
+    )
     total_result = await db.execute(count_stmt)
     total = total_result.scalar() or 0
 
-    # Fetch paginated + sorted documents
+    # Fetch paginated + sorted documents for this owner
     offset = (page - 1) * page_size
     items_stmt = (
         select(Document)
+        .where(Document.owner_id == owner_uuid)
         .order_by(sort_column)
         .offset(offset)
         .limit(page_size)

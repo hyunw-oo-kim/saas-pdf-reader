@@ -101,16 +101,22 @@ class FakeListDBSession:
 
     async def execute(self, stmt):
         self._call_count += 1
-        # First call is the COUNT query, second is the SELECT query
-        if self._call_count == 1:
-            return FakeExecuteResult(scalar_value=len(self._documents))
-
-        # Parse sort and pagination from the compiled statement
-        # We apply sorting and pagination in-memory based on the statement
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
-        # Determine sort field and order
+        # Filter by owner_id if present in the WHERE clause
+        # SQLAlchemy compiles UUID without hyphens, e.g. 'aaaaaaaa000000000000000000000001'
+        import re
         docs = list(self._documents)
+        match = re.search(r"owner_id\s*=\s*'([0-9a-f]{32})'", compiled)
+        if match:
+            filter_uuid = uuid.UUID(hex=match.group(1))
+            docs = [d for d in docs if d.owner_id == filter_uuid]
+
+        # First call is the COUNT query, second is the SELECT query
+        if self._call_count == 1:
+            return FakeExecuteResult(scalar_value=len(docs))
+
+        # Determine sort field and order
         if "filename" in compiled and "ORDER BY" in compiled.upper():
             reverse = "DESC" in compiled.upper().split("ORDER BY")[1]
             docs.sort(key=lambda d: d.filename, reverse=reverse)
@@ -359,3 +365,61 @@ class TestListDocumentsEndpoint:
         data = resp.json()
         assert data["items"] == []
         assert data["total"] == 5
+
+
+class TestOwnerIsolation:
+    """문서 목록이 owner_id 기준으로 격리되는지 테스트한다."""
+
+    def test_user_sees_only_own_documents(self):
+        """사용자 A는 자신이 올린 문서만 본다."""
+        owner_a_id = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
+        owner_b_id = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
+
+        doc_a = FakeDoc(owner_id=owner_a_id, filename="a.pdf")
+        doc_b = FakeDoc(owner_id=owner_b_id, filename="b.pdf")
+
+        db = FakeListDBSession([doc_a, doc_b])
+        user_a = FakeUser(user_id=str(owner_a_id))
+        client = _build_list_app(user=user_a, db_session=db)
+
+        resp = client.get("/api/documents")
+        assert resp.status_code == 200
+        data = resp.json()
+        filenames = [item["filename"] for item in data["items"]]
+        assert "a.pdf" in filenames
+        assert "b.pdf" not in filenames
+
+    def test_user_b_sees_only_own_documents(self):
+        """사용자 B는 자신이 올린 문서만 본다."""
+        owner_a_id = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
+        owner_b_id = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
+
+        doc_a = FakeDoc(owner_id=owner_a_id, filename="a.pdf")
+        doc_b = FakeDoc(owner_id=owner_b_id, filename="b.pdf")
+
+        db = FakeListDBSession([doc_a, doc_b])
+        user_b = FakeUser(user_id=str(owner_b_id))
+        client = _build_list_app(user=user_b, db_session=db)
+
+        resp = client.get("/api/documents")
+        assert resp.status_code == 200
+        data = resp.json()
+        filenames = [item["filename"] for item in data["items"]]
+        assert "b.pdf" in filenames
+        assert "a.pdf" not in filenames
+
+    def test_empty_result_when_no_own_documents(self):
+        """자신이 올린 문서가 없으면 빈 목록을 반환한다."""
+        other_owner_id = uuid.UUID("cccccccc-0000-0000-0000-000000000003")
+        doc = FakeDoc(owner_id=other_owner_id, filename="other.pdf")
+
+        my_id = uuid.UUID("dddddddd-0000-0000-0000-000000000004")
+        db = FakeListDBSession([doc])
+        user = FakeUser(user_id=str(my_id))
+        client = _build_list_app(user=user, db_session=db)
+
+        resp = client.get("/api/documents")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["items"] == []
+        assert data["total"] == 0
