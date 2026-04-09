@@ -22,6 +22,21 @@ const TOKEN_REFRESH_THRESHOLD_MS = 13 * 60 * 1000;
 const ANNOTATION_SAVE_DEBOUNCE_MS = 1000;
 
 /**
+ * Decode the JWT access_token from localStorage and return the email claim.
+ * Falls back to "Unknown User" if token is missing or malformed.
+ */
+function getEmailFromToken(): string {
+  try {
+    const token = localStorage.getItem("access_token");
+    if (!token) return "Unknown User";
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return payload.email ?? payload.name ?? "Unknown User";
+  } catch {
+    return "Unknown User";
+  }
+}
+
+/**
  * Determine if the current user has a read-only (Viewer) role.
  * In a real app this would come from auth context / JWT claims.
  * For now we read from a query param or default to false.
@@ -116,8 +131,9 @@ export default function DocumentViewerPage() {
         instanceRef.current = instance;
         setViewerInstance(instance);
 
-        // Load saved annotations after document is ready
+        // Set annotation author to the current user's email
         const { documentViewer, annotationManager } = instance.Core;
+        annotationManager.setCurrentUser(getEmailFromToken());
 
         documentViewer.addEventListener("documentLoaded", async () => {
           if (cancelled) return;
