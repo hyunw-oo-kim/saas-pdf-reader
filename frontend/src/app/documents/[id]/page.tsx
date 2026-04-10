@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchAnnotations, fetchDocumentView, saveAnnotations } from "@/lib/api";
+import { fetchAnnotations, fetchDocumentView, getEmailFromToken, saveAnnotations } from "@/lib/api";
 import {
   exportAnnotations,
   importAnnotations,
@@ -20,21 +20,6 @@ const TOKEN_REFRESH_THRESHOLD_MS = 13 * 60 * 1000;
 
 /** Debounce delay for auto-saving annotations (ms). */
 const ANNOTATION_SAVE_DEBOUNCE_MS = 1000;
-
-/**
- * Decode the JWT access_token from localStorage and return the email claim.
- * Falls back to "Unknown User" if token is missing or malformed.
- */
-function getEmailFromToken(): string {
-  try {
-    const token = localStorage.getItem("access_token");
-    if (!token) return "Unknown User";
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.email ?? payload.name ?? "Unknown User";
-  } catch {
-    return "Unknown User";
-  }
-}
 
 /**
  * Determine if the current user has a read-only (Viewer) role.

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -18,6 +19,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from app.routers.documents import router
+
+# SQLAlchemy compiles UUIDs without hyphens in literal_binds mode
+OWNER_ID_UUID_RE = re.compile(r"owner_id\s*=\s*'([0-9a-f]{32})'")
 
 
 # ---------------------------------------------------------------------------
@@ -103,20 +107,15 @@ class FakeListDBSession:
         self._call_count += 1
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
-        # Filter by owner_id if present in the WHERE clause
-        # SQLAlchemy compiles UUID without hyphens, e.g. 'aaaaaaaa000000000000000000000001'
-        import re
         docs = list(self._documents)
-        match = re.search(r"owner_id\s*=\s*'([0-9a-f]{32})'", compiled)
+        match = OWNER_ID_UUID_RE.search(compiled)
         if match:
             filter_uuid = uuid.UUID(hex=match.group(1))
             docs = [d for d in docs if d.owner_id == filter_uuid]
 
-        # First call is the COUNT query, second is the SELECT query
         if self._call_count == 1:
             return FakeExecuteResult(scalar_value=len(docs))
 
-        # Determine sort field and order
         if "filename" in compiled and "ORDER BY" in compiled.upper():
             reverse = "DESC" in compiled.upper().split("ORDER BY")[1]
             docs.sort(key=lambda d: d.filename, reverse=reverse)
@@ -127,7 +126,6 @@ class FakeListDBSession:
             reverse = "DESC" in compiled.upper().split("ORDER BY")[1]
             docs.sort(key=lambda d: d.uploaded_at, reverse=reverse)
 
-        # Apply offset and limit
         offset = 0
         limit = len(docs)
         if hasattr(stmt, '_offset_clause') and stmt._offset_clause is not None:
@@ -135,8 +133,7 @@ class FakeListDBSession:
         if hasattr(stmt, '_limit_clause') and stmt._limit_clause is not None:
             limit = stmt._limit_clause.value
 
-        sliced = docs[offset:offset + limit]
-        return FakeExecuteResult(items=sliced)
+        return FakeExecuteResult(items=docs[offset:offset + limit])
 
     def reset(self):
         self._call_count = 0
@@ -370,43 +367,26 @@ class TestListDocumentsEndpoint:
 class TestOwnerIsolation:
     """문서 목록이 owner_id 기준으로 격리되는지 테스트한다."""
 
-    def test_user_sees_only_own_documents(self):
-        """사용자 A는 자신이 올린 문서만 본다."""
-        owner_a_id = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
-        owner_b_id = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
+    OWNER_A = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
+    OWNER_B = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
 
-        doc_a = FakeDoc(owner_id=owner_a_id, filename="a.pdf")
-        doc_b = FakeDoc(owner_id=owner_b_id, filename="b.pdf")
+    @pytest.mark.parametrize("owner_id,expected,not_expected", [
+        (OWNER_A, "a.pdf", "b.pdf"),
+        (OWNER_B, "b.pdf", "a.pdf"),
+    ])
+    def test_user_sees_only_own_documents(self, owner_id, expected, not_expected):
+        """각 사용자는 자신이 올린 문서만 본다."""
+        doc_a = FakeDoc(owner_id=self.OWNER_A, filename="a.pdf")
+        doc_b = FakeDoc(owner_id=self.OWNER_B, filename="b.pdf")
 
         db = FakeListDBSession([doc_a, doc_b])
-        user_a = FakeUser(user_id=str(owner_a_id))
-        client = _build_list_app(user=user_a, db_session=db)
+        client = _build_list_app(user=FakeUser(user_id=str(owner_id)), db_session=db)
 
         resp = client.get("/api/documents")
         assert resp.status_code == 200
-        data = resp.json()
-        filenames = [item["filename"] for item in data["items"]]
-        assert "a.pdf" in filenames
-        assert "b.pdf" not in filenames
-
-    def test_user_b_sees_only_own_documents(self):
-        """사용자 B는 자신이 올린 문서만 본다."""
-        owner_a_id = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001")
-        owner_b_id = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
-
-        doc_a = FakeDoc(owner_id=owner_a_id, filename="a.pdf")
-        doc_b = FakeDoc(owner_id=owner_b_id, filename="b.pdf")
-
-        db = FakeListDBSession([doc_a, doc_b])
-        user_b = FakeUser(user_id=str(owner_b_id))
-        client = _build_list_app(user=user_b, db_session=db)
-
-        resp = client.get("/api/documents")
-        assert resp.status_code == 200
-        data = resp.json()
-        filenames = [item["filename"] for item in data["items"]]
-        assert "b.pdf" in filenames
-        assert "a.pdf" not in filenames
+        filenames = [item["filename"] for item in resp.json()["items"]]
+        assert expected in filenames
+        assert not_expected not in filenames
 
     def test_empty_result_when_no_own_documents(self):
         """자신이 올린 문서가 없으면 빈 목록을 반환한다."""

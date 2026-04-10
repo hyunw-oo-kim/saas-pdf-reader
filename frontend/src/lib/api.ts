@@ -59,6 +59,17 @@ function clearTokens(): void {
   localStorage.removeItem("refresh_token");
 }
 
+export function getEmailFromToken(): string {
+  try {
+    const token = getAccessToken();
+    if (!token) return "Unknown User";
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return payload.email ?? payload.name ?? "Unknown User";
+  } catch {
+    return "Unknown User";
+  }
+}
+
 function redirectToLogin(): void {
   if (typeof window !== "undefined") {
     clearTokens();
